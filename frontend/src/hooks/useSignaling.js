@@ -13,12 +13,34 @@ export function useSignaling(roomId, displayName, onMessage) {
     if (!roomId || !displayName) return;
 
     const url = import.meta.env.VITE_SIGNALING_URL || 'ws://localhost:8080';
-    // Ensure we use ws:// or wss:// protocols
-    const wsUrl = `${url.replace(/^http/, 'ws')}/ws`;
+    
+    // Robustly format websocket URL
+    let wsUrl = url.trim();
+    if (wsUrl.startsWith('https://')) {
+      wsUrl = wsUrl.replace('https://', 'wss://');
+    } else if (wsUrl.startsWith('http://')) {
+      wsUrl = wsUrl.replace('http://', 'ws://');
+    } else if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
+      if (wsUrl.includes('localhost') || wsUrl.includes('127.0.0.1')) {
+        wsUrl = 'ws://' + wsUrl;
+      } else {
+        wsUrl = 'wss://' + wsUrl;
+      }
+    }
+    if (!wsUrl.endsWith('/ws')) {
+      wsUrl = wsUrl.replace(/\/$/, '') + '/ws';
+    }
 
     console.log('Connecting to Syncra signaling:', wsUrl);
-    const socket = new WebSocket(wsUrl);
-    ws.current = socket;
+    
+    let socket;
+    try {
+      socket = new WebSocket(wsUrl);
+      ws.current = socket;
+    } catch (err) {
+      console.error('Failed to construct WebSocket. Malformed URL:', wsUrl, err);
+      return;
+    }
 
     socket.onopen = () => {
       console.log('Signaling connection established');
@@ -50,8 +72,12 @@ export function useSignaling(roomId, displayName, onMessage) {
     };
 
     return () => {
-      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
-        socket.send(JSON.stringify({ type: 'leave' }));
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+        try {
+          socket.send(JSON.stringify({ type: 'leave' }));
+        } catch (e) {
+          // ignore
+        }
         socket.close();
       }
     };
@@ -59,7 +85,11 @@ export function useSignaling(roomId, displayName, onMessage) {
 
   const sendMessage = useCallback((msg) => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify(msg));
+      try {
+        ws.current.send(JSON.stringify(msg));
+      } catch (err) {
+        console.error('Failed to send signaling message:', err);
+      }
     } else {
       console.warn('Signaling WebSocket not ready. Message dropped:', msg);
     }
