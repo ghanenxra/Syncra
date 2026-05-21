@@ -1,0 +1,18 @@
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+frontend/.env
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# Go
+Signaling/signaling
+Signaling/signaling.exe
+Signaling/.env
+Signaling/.env.local
+
+# General
+.DS_Store
+Thumbs.db
