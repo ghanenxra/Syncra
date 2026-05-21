@@ -23,8 +23,8 @@
   --danger: #ef4444;
   --danger-hover: #dc2626;
   --danger-glow: rgba(239, 68, 68, 0.25);
-  --panel-bg: rgba(20, 16, 36, 0.55);
-  --border-color: rgba(255, 255, 255, 0.08);
+  --panel-bg: rgba(14, 11, 28, 0.94);
+  --border-color: rgba(255, 255, 255, 0.1);
   --text-muted: #94a3b8;
 }
 
@@ -323,9 +323,9 @@ body {
   align-items: center;
   justify-content: center;
   padding: 1rem;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: rgba(4, 3, 8, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .modal-content {
