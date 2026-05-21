@@ -112,6 +112,25 @@ func (c *Client) readPump() {
 				}
 			}
 
+		case "mute-status":
+			msg.From = c.ID
+			if msg.To != "" {
+				room, exists := c.Hub.GetRoom(c.RoomID)
+				if exists {
+					c.Hub.mu.RLock()
+					target, ok := room.Clients[msg.To]
+					c.Hub.mu.RUnlock()
+					if ok {
+						select {
+						case target.Send <- msg:
+						default:
+						}
+					}
+				}
+			} else {
+				c.Hub.BroadcastToRoomExcept(c.RoomID, c.ID, msg)
+			}
+
 		case "chat":
 			msg.From = c.ID
 			msg.DisplayName = c.DisplayName

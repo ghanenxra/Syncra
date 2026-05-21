@@ -434,12 +434,17 @@ body {
   flex: 1;
   gap: 1rem;
   min-width: 0;
+  min-height: 0;
+  height: 100%;
 }
 
 .room-right {
   width: 20rem;
   flex-shrink: 0;
   height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .room-badge {
@@ -711,6 +716,74 @@ body {
   display: inline-block;
   text-shadow: 0 0 10px rgba(139, 92, 246, 0.3);
   margin-left: 0.2em;
+}
+
+/* Extra utility classes for ChatPanel */
+.overflow-y-auto { overflow-y: auto; }
+.overflow-hidden { overflow: hidden; }
+.max-h-48 { max-height: 12rem; }
+.pr-1 { padding-right: 0.25rem; }
+.space-y-4 > * + * { margin-top: 1rem; }
+.space-y-1\.5 > * + * { margin-top: 0.375rem; }
+.items-end { align-items: flex-end; }
+.items-start { align-items: flex-start; }
+.mb-1 { margin-bottom: 0.25rem; }
+.mb-2 { margin-bottom: 0.5rem; }
+.pb-1\.5 { padding-bottom: 0.375rem; }
+.rounded-xl { border-radius: 0.75rem; }
+.rounded-tr-none { border-top-right-radius: 0; }
+.rounded-tl-none { border-top-left-radius: 0; }
+.max-w-\[85\%\] { max-width: 85%; }
+.break-words { overflow-wrap: break-word; }
+.bg-violet-600 { background-color: #7c3aed; }
+.text-white { color: #fff; }
+.text-slate-200 { color: #cbd5e1; }
+.text-slate-400 { color: #94a3b8; }
+.text-slate-500 { color: #64748b; }
+.text-slate-600 { color: #475569; }
+.text-xs { font-size: 0.75rem; }
+.text-sm { font-size: 0.875rem; }
+.font-semibold { font-weight: 600; }
+.font-medium { font-weight: 500; }
+.font-bold { font-weight: 700; }
+.font-normal { font-weight: 400; }
+.z-50 { z-index: 50; }
+.shadow-xl { box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); }
+.right-4 { right: 1rem; }
+.top-14 { top: 3.5rem; }
+.w-60 { width: 15rem; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.border { border: 1px solid var(--border-color); }
+.border-b { border-bottom: 1px solid var(--border-color); }
+.border-t { border-top: 1px solid var(--border-color); }
+.border-white\/5 { border-color: rgba(255, 255, 255, 0.05); }
+.border-white\/10 { border-color: rgba(255, 255, 255, 0.1); }
+.bg-white\/2 { background: rgba(255, 255, 255, 0.02); }
+.bg-white\/5 { background: rgba(255, 255, 255, 0.05); }
+.w-4 { width: 1rem; }
+.h-4 { height: 1rem; }
+.w-3 { width: 0.75rem; }
+.h-3 { height: 0.75rem; }
+.w-3\.5 { width: 0.875rem; }
+.h-3\.5 { height: 0.875rem; }
+.px-2\.5 { padding-left: 0.625rem; padding-right: 0.625rem; }
+.py-1 { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+.py-1\.5 { padding-top: 0.375rem; padding-bottom: 0.375rem; }
+.text-violet-400 { color: #a78bfa; }
+.bg-violet-500\/10 { background-color: rgba(139, 92, 246, 0.1); }
+.hover\:bg-violet-500\/20:hover { background-color: rgba(139, 92, 246, 0.2); }
+.border-violet-500\/20 { border-color: rgba(139, 92, 246, 0.2); }
+
+/* Peer mute styling state */
+.peer-card.muted {
+  border-color: rgba(239, 68, 68, 0.3) !important;
+  background: rgba(239, 68, 68, 0.05) !important;
+  color: #f87171 !important;
+}
+
+.peer-avatar.muted {
+  background: rgba(239, 68, 68, 0.2) !important;
+  color: #f87171 !important;
 }
 
 

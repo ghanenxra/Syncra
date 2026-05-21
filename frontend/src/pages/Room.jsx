@@ -6,7 +6,7 @@ import VoiceControls from '../components/VoiceControls';
 import { Tv, Crown, Mic, MicOff, ShieldAlert, X, Copy, Check, Sparkles } from 'lucide-react';
 
 // Subcomponent to play remote audio streams
-function RemoteAudio({ stream }) {
+function RemoteAudio({ stream, muted }) {
   const audioRef = useRef(null);
 
   useEffect(() => {
@@ -15,7 +15,13 @@ function RemoteAudio({ stream }) {
     }
   }, [stream]);
 
-  return <audio ref={audioRef} autoPlay playsInline />;
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.muted = muted;
+    }
+  }, [muted]);
+
+  return <audio ref={audioRef} autoPlay playsInline muted={muted} />;
 }
 
 export default function Room({ roomId, displayName }) {
@@ -25,6 +31,7 @@ export default function Room({ roomId, displayName }) {
     localMicStream,
     localScreenStream,
     micMuted,
+    roomMuted,
     screenSharing,
     myPeerId,
     hostId,
@@ -32,6 +39,7 @@ export default function Room({ roomId, displayName }) {
     resolution,
     chatMessages,
     toggleMic,
+    toggleRoomMuted,
     toggleScreenSharing,
     hostMuteEveryone,
     sendChatMessage
@@ -115,14 +123,14 @@ export default function Room({ roomId, displayName }) {
             {peers.map((peer) => {
               const isPeerMe = peer.id === myPeerId;
               const isPeerHost = peer.id === hostId;
-              const isPeerMuted = isPeerMe ? micMuted : false; // Simplification, standard WebRTC handles track active
+              const isPeerMuted = isPeerMe ? micMuted : (peer.muted || false);
               
               return (
                 <div
                   key={peer.id}
-                  className={`peer-card ${isPeerHost ? 'host' : ''}`}
+                  className={`peer-card ${isPeerHost ? 'host' : ''} ${isPeerMuted ? 'muted' : ''}`}
                 >
-                  <div className={`peer-avatar ${isPeerHost ? 'host' : 'guest'}`}>
+                  <div className={`peer-avatar ${isPeerHost ? 'host' : 'guest'} ${isPeerMuted ? 'muted' : ''}`}>
                     {peer.displayName.substring(0, 2).toUpperCase()}
                   </div>
                   <span style={{ fontSize: '12px', fontWeight: '600' }}>{peer.displayName}</span>
@@ -139,6 +147,8 @@ export default function Room({ roomId, displayName }) {
             <VoiceControls
               micMuted={micMuted}
               toggleMic={toggleMic}
+              roomMuted={roomMuted}
+              toggleRoomMuted={toggleRoomMuted}
               screenSharing={screenSharing}
               toggleScreenSharing={toggleScreenSharing}
               isHost={isHost}
@@ -165,7 +175,7 @@ export default function Room({ roomId, displayName }) {
         // Only attach audio streams if they contain audio tracks
         const hasAudio = stream && stream.getAudioTracks && stream.getAudioTracks().length > 0;
         if (!hasAudio) return null;
-        return <RemoteAudio key={peerId} stream={stream} />;
+        return <RemoteAudio key={peerId} stream={stream} muted={roomMuted} />;
       })}
 
       {/* Share Party Code Modal (In-Browser Window) */}

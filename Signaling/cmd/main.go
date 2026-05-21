@@ -52,23 +52,6 @@ func main() {
 		})
 	}))
 
-	// HTTP GET /turn - Fetches temporary TURN configurations
-	http.HandleFunc("/turn", enableCORS(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		creds, err := internal.GetTurnCredentials()
-		if err != nil {
-			log.Printf("Error generating TURN credentials: %v", err)
-			http.Error(w, "Failed to generate TURN credentials", http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(creds)
-	}))
 
 	// WS /ws - Handshake upgrades and messages pumping
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {

@@ -7,8 +7,8 @@ export default function VideoGrid({ localScreenStream, remoteStreams, hostId, is
   // Find host's screen stream. If we are host, use local. Otherwise, find in remote.
   const activeStream = isHost ? localScreenStream : remoteStreams[hostId];
   
-  // Verify if it contains a video track
-  const hasVideoTrack = activeStream && activeStream.getVideoTracks().length > 0;
+  // Verify if it contains an active video track
+  const hasVideoTrack = activeStream && activeStream.getVideoTracks().some(track => track.readyState === 'live');
 
   useEffect(() => {
     if (videoRef.current) {

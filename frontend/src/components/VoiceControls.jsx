@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
-import { Mic, MicOff, Monitor, MonitorOff, Copy, LogOut, VolumeX, Check } from 'lucide-react';
+import { Mic, MicOff, Monitor, MonitorOff, Copy, LogOut, VolumeX, Volume2, Check } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export default function VoiceControls({
   micMuted,
   toggleMic,
+  roomMuted,
+  toggleRoomMuted,
   screenSharing,
   toggleScreenSharing,
   isHost,
@@ -53,6 +55,15 @@ export default function VoiceControls({
           title={micMuted ? 'Unmute Microphone' : 'Mute Microphone'}
         >
           {micMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+        </button>
+
+        {/* Speaker Mute */}
+        <button
+          onClick={toggleRoomMuted}
+          className={`btn-icon ${roomMuted ? 'danger-active' : 'text-slate-300 hover:text-white'}`}
+          title={roomMuted ? 'Unmute Speaker' : 'Mute Speaker'}
+        >
+          {roomMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
         </button>
 
         {/* Toggle Screen Share (Host only) */}

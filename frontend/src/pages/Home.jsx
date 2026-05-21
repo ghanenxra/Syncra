@@ -22,7 +22,10 @@ export default function Home() {
     setError('');
 
     try {
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:10000';
+      const defaultApiUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+        ? 'http://localhost:10000'
+        : 'https://syncra-rneu.onrender.com';
+      const apiUrl = import.meta.env.VITE_API_URL || defaultApiUrl;
       const response = await fetch(`${apiUrl}/room/create`, {
         method: 'POST',
         headers: {

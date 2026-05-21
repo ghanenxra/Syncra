@@ -7,6 +7,7 @@ export function useWebRTC(roomId, displayName) {
   const [localMicStream, setLocalMicStream] = useState(null);
   const [localScreenStream, setLocalScreenStream] = useState(null);
   const [micMuted, setMicMuted] = useState(false);
+  const [roomMuted, setRoomMuted] = useState(false);
   const [screenSharing, setScreenSharing] = useState(false);
   const [myPeerId, setMyPeerId] = useState('');
   const [hostId, setHostId] = useState('');
@@ -17,27 +18,26 @@ export function useWebRTC(roomId, displayName) {
   const screenSenders = useRef({}); // peerId -> [RTCRtpSender]
   const iceServersRef = useRef(null);
 
-  // Fetch ICE Servers from signaling server
-  const getIceServers = async () => {
-    if (iceServersRef.current) return iceServersRef.current;
-    try {
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:10000';
-      const res = await fetch(`${apiUrl}/turn`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.iceServers) {
-          iceServersRef.current = data.iceServers;
-          return data.iceServers;
-        }
-      }
-    } catch (err) {
-      console.error('Error fetching TURN config, falling back to STUN:', err);
+  // Static ICE Servers configuration
+  const getIceServers = () => [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    {
+      urls: "turn:openrelay.metered.ca:80",
+      username: "openrelayproject",
+      credential: "openrelayproject"
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443",
+      username: "openrelayproject",
+      credential: "openrelayproject"
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443?transport=tcp",
+      username: "openrelayproject",
+      credential: "openrelayproject"
     }
-    // Fallback STUN configuration
-    const fallback = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
-    iceServersRef.current = fallback;
-    return fallback;
-  };
+  ];
 
   // Helper to initialize local microphone stream
   const initLocalAudio = async () => {
@@ -75,9 +75,16 @@ export function useWebRTC(roomId, displayName) {
       pcs.current[peerId].close();
     }
 
-    const configIce = await getIceServers();
+    const configIce = getIceServers();
     const pc = new RTCPeerConnection({ iceServers: configIce });
     pcs.current[peerId] = pc;
+
+    // Ensure we can receive remote video (screen share) tracks
+    try {
+      pc.addTransceiver('video', { direction: 'recvonly' });
+    } catch (e) {
+      console.warn('Failed to add video transceiver:', e);
+    }
 
     // Attach local mic tracks
     if (audioStream) {
@@ -110,6 +117,37 @@ export function useWebRTC(roomId, displayName) {
     // Track arrival callback
     pc.ontrack = (event) => {
       const [remoteStream] = event.streams;
+
+      event.streams[0].getTracks().forEach(track => {
+        track.onended = () => {
+          console.log(`Track ${track.id} ended for peer ${peerId}`);
+          setRemoteStreams(prev => ({ ...prev }));
+        };
+        track.onmute = () => {
+          console.log(`Track ${track.id} muted for peer ${peerId}`);
+          setRemoteStreams(prev => ({ ...prev }));
+        };
+        track.onunmute = () => {
+          console.log(`Track ${track.id} unmuted for peer ${peerId}`);
+          setRemoteStreams(prev => ({ ...prev }));
+        };
+      });
+
+      if (event.track) {
+        event.track.onended = () => {
+          console.log(`Track ${event.track.id} ended for peer ${peerId}`);
+          setRemoteStreams(prev => ({ ...prev }));
+        };
+        event.track.onmute = () => {
+          console.log(`Track ${event.track.id} muted for peer ${peerId}`);
+          setRemoteStreams(prev => ({ ...prev }));
+        };
+        event.track.onunmute = () => {
+          console.log(`Track ${event.track.id} unmuted for peer ${peerId}`);
+          setRemoteStreams(prev => ({ ...prev }));
+        };
+      }
+
       setRemoteStreams(prev => {
         // If there's an existing stream, append tracks, otherwise add new
         const existing = prev[peerId];
@@ -179,12 +217,32 @@ export function useWebRTC(roomId, displayName) {
         for (const peer of msg.peers) {
           await createPeerConnection(peer.id, peer.displayName, true, audio, null);
         }
+
+        // Broadcast our current mute status to the room
+        sendMessage({
+          type: 'mute-status',
+          muted: micMuted
+        });
         break;
 
       case 'peer-joined':
         // Add new peer to state
         setPeers(prev => [...prev, { id: msg.from, displayName: msg.displayName, isHost: msg.isHost }]);
-        // Wait for offer from the newly joined peer
+        // Send our current mute status to the new peer directly
+        sendMessage({
+          type: 'mute-status',
+          to: msg.from,
+          muted: micMuted
+        });
+        break;
+
+      case 'mute-status':
+        setPeers(prev => prev.map(p => {
+          if (p.id === msg.from) {
+            return { ...p, muted: msg.muted };
+          }
+          return p;
+        }));
         break;
 
       case 'offer':
@@ -286,33 +344,60 @@ export function useWebRTC(roomId, displayName) {
         const nextState = forceMuted !== null ? forceMuted : !audioTrack.enabled;
         audioTrack.enabled = !nextState;
         setMicMuted(nextState);
+
+        // Notify other peers of our mute status
+        sendMessage({
+          type: 'mute-status',
+          muted: nextState
+        });
+      }
+    }
+  };
+
+  // Helper to stop screen share and renegotiate
+  const handleStopScreenShare = async (streamToStop) => {
+    const stream = streamToStop || localScreenStream;
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+    }
+    setLocalScreenStream(null);
+    setScreenSharing(false);
+
+    for (const peerId of Object.keys(pcs.current)) {
+      const pc = pcs.current[peerId];
+      const senders = screenSenders.current[peerId] || [];
+      senders.forEach(sender => {
+        try {
+          pc.removeTrack(sender);
+        } catch (e) {
+          console.warn('Failed to remove track:', e);
+        }
+      });
+      delete screenSenders.current[peerId];
+
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        sendMessage({
+          type: 'offer',
+          to: peerId,
+          sdp: pc.localDescription.sdp
+        });
+      } catch (err) {
+        console.error(`Failed to renegotiate offer after stopping screen share for peer ${peerId}:`, err);
       }
     }
   };
 
   // Toggle screen share (Host only)
   const toggleScreenSharing = async () => {
-    if (screenSharing) {
-      // Stop screen share
-      if (localScreenStream) {
-        localScreenStream.getTracks().forEach(t => t.stop());
-      }
-      setLocalScreenStream(null);
-      setScreenSharing(false);
-
-      // Remove screen tracks from all PCs
-      Object.keys(pcs.current).forEach(peerId => {
-        const pc = pcs.current[peerId];
-        const senders = screenSenders.current[peerId] || [];
-        senders.forEach(sender => {
-          try {
-            pc.removeTrack(sender);
-          } catch (e) {
-            console.warn(e);
-          }
-        });
-        delete screenSenders.current[peerId];
-      });
+    const isActuallyHost = myPeerId && hostId && myPeerId === hostId;
+    if (!isActuallyHost) {
+      console.warn("Only the host is authorized to share screen");
+      return;
+    }
+    if (screenSharing || localScreenStream) {
+      await handleStopScreenShare(localScreenStream);
     } else {
       // Start screen share
       try {
@@ -350,24 +435,11 @@ export function useWebRTC(roomId, displayName) {
         }
 
         // Setup end handler (when browser stop sharing bar is clicked)
-        stream.getVideoTracks()[0].onended = () => {
-          // Stop tracks and clean up state
-          stream.getTracks().forEach(t => t.stop());
-          setLocalScreenStream(null);
-          setScreenSharing(false);
-          Object.keys(pcs.current).forEach(peerId => {
-            const pc = pcs.current[peerId];
-            const senders = screenSenders.current[peerId] || [];
-            senders.forEach(sender => {
-              try {
-                pc.removeTrack(sender);
-              } catch (e) {
-                console.warn(e);
-              }
-            });
-            delete screenSenders.current[peerId];
-          });
-        };
+        if (stream.getVideoTracks()[0]) {
+          stream.getVideoTracks()[0].onended = () => {
+            handleStopScreenShare(stream);
+          };
+        }
       } catch (err) {
         console.error('Failed to share screen:', err);
       }
@@ -403,13 +475,15 @@ export function useWebRTC(roomId, displayName) {
     localMicStream,
     localScreenStream,
     micMuted,
+    roomMuted,
     screenSharing,
     myPeerId,
     hostId,
-    isHost: myPeerId === hostId,
+    isHost: myPeerId !== '' && hostId !== '' && myPeerId === hostId,
     resolution,
     chatMessages,
     toggleMic: () => muteLocalMicrophone(),
+    toggleRoomMuted: () => setRoomMuted(prev => !prev),
     toggleScreenSharing,
     hostMuteEveryone,
     sendChatMessage

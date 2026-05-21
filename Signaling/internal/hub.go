@@ -25,6 +25,7 @@ type Message struct {
 	Resolution  string                 `json:"resolution,omitempty"`
 	Peers       []PeerInfo             `json:"peers,omitempty"`
 	IsHost      bool                   `json:"isHost,omitempty"`
+	Muted       bool                   `json:"muted,omitempty"`
 	Message     string                 `json:"message,omitempty"` // For errors
 }
 

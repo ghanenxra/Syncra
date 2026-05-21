@@ -12,7 +12,10 @@ export function useSignaling(roomId, displayName, onMessage) {
   useEffect(() => {
     if (!roomId || !displayName) return;
 
-    const url = import.meta.env.VITE_SIGNALING_URL || 'ws://localhost:10000';
+    const defaultSignalingUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+      ? 'ws://localhost:10000'
+      : 'wss://syncra-rneu.onrender.com';
+    const url = import.meta.env.VITE_SIGNALING_URL || defaultSignalingUrl;
     
     // Robustly format websocket URL
     let wsUrl = url.trim();
