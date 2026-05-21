@@ -10,12 +10,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@rolldown/binding-win32-x64-msvc": "^1.0.2",
-    "lightningcss-win32-x64-msvc": "^1.32.0",
     "lucide-react": "^0.475.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-router-dom": "^6.22.3"
+  },
+  "optionalDependencies": {
+    "@rolldown/binding-win32-x64-msvc": "^1.0.2",
+    "lightningcss-win32-x64-msvc": "^1.32.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
