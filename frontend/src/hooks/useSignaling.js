@@ -12,7 +12,7 @@ export function useSignaling(roomId, displayName, onMessage) {
   useEffect(() => {
     if (!roomId || !displayName) return;
 
-    const url = import.meta.env.VITE_SIGNALING_URL || 'ws://localhost:8080';
+    const url = import.meta.env.VITE_SIGNALING_URL || 'ws://localhost:10000';
     
     // Robustly format websocket URL
     let wsUrl = url.trim();

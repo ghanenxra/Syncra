@@ -16,5 +16,5 @@ RUN apk --no-cache add ca-certificates
 WORKDIR /root/
 COPY --from=builder /app/signaling .
 
-EXPOSE 8080
+EXPOSE 10000
 CMD ["./signaling"]

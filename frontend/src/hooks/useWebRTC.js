@@ -21,7 +21,7 @@ export function useWebRTC(roomId, displayName) {
   const getIceServers = async () => {
     if (iceServersRef.current) return iceServersRef.current;
     try {
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:10000';
       const res = await fetch(`${apiUrl}/turn`);
       if (res.ok) {
         const data = await res.json();
