@@ -84,7 +84,7 @@ export default function VoiceControls({
             className="btn-icon text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 border-rose-500/20"
             title="Mute Everyone"
           >
-            <VolumeX className="w-5 h-5" />
+            <MicOff className="w-5 h-5" />
           </button>
         )}
       </div>

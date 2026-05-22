@@ -14,9 +14,28 @@ export function useWebRTC(roomId, displayName) {
   const [hostId, setHostId] = useState('');
   const [resolution, setResolution] = useState('1080p60');
   const [chatMessages, setChatMessages] = useState([]);
+  const [connecting, setConnecting] = useState(true);
+  const [connectionError, setConnectionError] = useState(null);
 
   const pcs = useRef({}); // peerId -> RTCPeerConnection
+  const screenSenders = useRef({}); // peerId -> RTCRtpSender
   const iceServersRef = useRef(null);
+
+  const localScreenStreamRef = useRef(null);
+  const myPeerIdRef = useRef('');
+  const hostIdRef = useRef('');
+
+  useEffect(() => {
+    localScreenStreamRef.current = localScreenStream;
+  }, [localScreenStream]);
+
+  useEffect(() => {
+    myPeerIdRef.current = myPeerId;
+  }, [myPeerId]);
+
+  useEffect(() => {
+    hostIdRef.current = hostId;
+  }, [hostId]);
 
   // Static ICE Servers configuration
   const getIceServers = () => [
@@ -43,6 +62,12 @@ export function useWebRTC(roomId, displayName) {
   const initLocalAudio = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      if (micMuted) {
+        const audioTrack = stream.getAudioTracks()[0];
+        if (audioTrack) {
+          audioTrack.enabled = false;
+        }
+      }
       setLocalMicStream(stream);
       return stream;
     } catch (err) {
@@ -52,7 +77,14 @@ export function useWebRTC(roomId, displayName) {
       const mockOsc = mockCtx.createOscillator();
       const mockDst = mockCtx.createMediaStreamDestination();
       mockOsc.connect(mockDst);
-      return mockDst.stream;
+      const stream = mockDst.stream;
+      if (micMuted) {
+        const audioTrack = stream.getAudioTracks()[0];
+        if (audioTrack) {
+          audioTrack.enabled = false;
+        }
+      }
+      return stream;
     }
   };
 
@@ -78,21 +110,17 @@ export function useWebRTC(roomId, displayName) {
     const pc = new RTCPeerConnection({ iceServers: configIce });
     pcs.current[peerId] = pc;
 
-    // Ensure we can send/receive remote video (screen share) tracks
-    try {
-      const direction = screenStream ? 'sendrecv' : 'recvonly';
-      const videoTrack = screenStream ? screenStream.getVideoTracks()[0] : null;
-      
-      const transceiver = pc.addTransceiver('video', { 
-        direction,
-        streams: screenStream ? [screenStream] : []
-      });
-
-      if (videoTrack && transceiver.sender) {
-        await transceiver.sender.replaceTrack(videoTrack);
+    // Attach local screen share track if host has one active
+    if (screenStream) {
+      const videoTrack = screenStream.getVideoTracks()[0];
+      if (videoTrack) {
+        try {
+          const sender = pc.addTrack(videoTrack, screenStream);
+          screenSenders.current[peerId] = sender;
+        } catch (e) {
+          console.warn('Failed to add screen track during peer connection creation:', e);
+        }
       }
-    } catch (e) {
-      console.warn('Failed to add video transceiver:', e);
     }
 
     // Attach local mic tracks
@@ -179,6 +207,7 @@ export function useWebRTC(roomId, displayName) {
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         pc.close();
         delete pcs.current[peerId];
+        delete screenSenders.current[peerId];
         setRemoteStreams(prev => {
           const next = { ...prev };
           delete next[peerId];
@@ -189,6 +218,37 @@ export function useWebRTC(roomId, displayName) {
           delete next[peerId];
           return next;
         });
+      }
+    };
+
+    pc.onsignalingstatechange = async () => {
+      console.log(`[SignalingState] ${remoteName}: ${pc.signalingState}`);
+      if (pc.signalingState === 'stable') {
+        const hasVideoSection = pc.remoteDescription && pc.remoteDescription.sdp.includes('m=video');
+        const currentScreenStream = localScreenStreamRef.current;
+        const isActuallyHost = myPeerIdRef.current && hostIdRef.current && myPeerIdRef.current === hostIdRef.current;
+        
+        if (currentScreenStream && isActuallyHost && !hasVideoSection) {
+          console.log(`Renegotiating screen share for peer ${peerId} (adding video section)...`);
+          try {
+            const videoTrack = currentScreenStream.getVideoTracks()[0];
+            if (videoTrack) {
+              if (!screenSenders.current[peerId]) {
+                const sender = pc.addTrack(videoTrack, currentScreenStream);
+                screenSenders.current[peerId] = sender;
+              }
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+              sendMessage({
+                type: 'offer',
+                to: peerId,
+                sdp: pc.localDescription.sdp
+              });
+            }
+          } catch (err) {
+            console.error('Failed to renegotiate screen share on stable state:', err);
+          }
+        }
       }
     };
 
@@ -213,6 +273,8 @@ export function useWebRTC(roomId, displayName) {
   const handleSignalingMessage = async (msg) => {
     switch (msg.type) {
       case 'joined':
+        setConnecting(false);
+        setConnectionError(null);
         setMyPeerId(msg.from);
         setHostId(msg.hostId);
         setResolution(msg.resolution);
@@ -345,9 +407,23 @@ export function useWebRTC(roomId, displayName) {
         });
         break;
 
+      case 'ws-closed':
+        setConnecting(false);
+        setConnectionError('Connection to signaling server was closed.');
+        break;
+
+      case 'ws-error':
+        setConnecting(false);
+        setConnectionError('Failed to connect to signaling server. Poor internet connection or server offline.');
+        break;
+
       case 'error':
-        alert(msg.message);
-        window.location.href = '/';
+        setConnecting(false);
+        if (msg.message === 'Room not found') {
+          setConnectionError('The party code is invalid. Please check the code and try again.');
+        } else {
+          setConnectionError(msg.message || 'An error occurred while connecting to the party.');
+        }
         break;
     }
   };
@@ -355,23 +431,37 @@ export function useWebRTC(roomId, displayName) {
   // Hook up useSignaling hook
   const { sendMessage } = useSignaling(roomId, displayName, handleSignalingMessage);
 
-  // Toggle local mic mute state
-  const muteLocalMicrophone = (forceMuted = null) => {
-    if (localMicStream) {
-      const audioTrack = localMicStream.getAudioTracks()[0];
-      if (audioTrack) {
-        const nextState = forceMuted !== null ? forceMuted : !audioTrack.enabled;
-        audioTrack.enabled = !nextState;
-        setMicMuted(nextState);
-
-        // Notify other peers of our mute status
-        sendMessage({
-          type: 'mute-status',
-          muted: nextState
-        });
+  // Timeout for joining the room
+  useEffect(() => {
+    if (!connecting) return;
+    
+    const timer = setTimeout(() => {
+      if (connecting) {
+        setConnecting(false);
+        setConnectionError('Connection timed out. Poor internet connection or signaling server unreachable.');
       }
-    }
-  };
+    }, 8000); // 8 seconds timeout
+
+    return () => clearTimeout(timer);
+  }, [connecting]);
+
+  // Toggle local mic mute state
+  const muteLocalMicrophone = useCallback((forceMuted = null) => {
+    setMicMuted(prev => {
+      const nextState = forceMuted !== null ? forceMuted : !prev;
+      if (localMicStream) {
+        const audioTrack = localMicStream.getAudioTracks()[0];
+        if (audioTrack) {
+          audioTrack.enabled = !nextState;
+        }
+      }
+      sendMessage({
+        type: 'mute-status',
+        muted: nextState
+      });
+      return nextState;
+    });
+  }, [localMicStream, sendMessage]);
 
   // Helper to stop screen share and renegotiate
   const handleStopScreenShare = async (streamToStop) => {
@@ -384,14 +474,14 @@ export function useWebRTC(roomId, displayName) {
 
     for (const peerId of Object.keys(pcs.current)) {
       const pc = pcs.current[peerId];
-      
-      const transceivers = pc.getTransceivers();
-      const videoTransceiver = transceivers.find(t => t.receiver.track.kind === 'video');
-      if (videoTransceiver) {
-        videoTransceiver.direction = 'recvonly';
-        if (videoTransceiver.sender) {
-          await videoTransceiver.sender.replaceTrack(null);
+      const sender = screenSenders.current[peerId];
+      if (sender) {
+        try {
+          pc.removeTrack(sender);
+        } catch (e) {
+          console.warn(`Failed to remove screen track for peer ${peerId}:`, e);
         }
+        delete screenSenders.current[peerId];
       }
 
       try {
@@ -438,13 +528,16 @@ export function useWebRTC(roomId, displayName) {
         // Add screen tracks to all peer connections and renegotiate
         for (const peerId of Object.keys(pcs.current)) {
           const pc = pcs.current[peerId];
-          
-          const transceivers = pc.getTransceivers();
-          const videoTransceiver = transceivers.find(t => t.receiver.track.kind === 'video');
-          if (videoTransceiver) {
-            videoTransceiver.direction = 'sendrecv';
-            if (videoTransceiver.sender) {
-              await videoTransceiver.sender.replaceTrack(videoTrack);
+          if (videoTrack) {
+            try {
+              const oldSender = screenSenders.current[peerId];
+              if (oldSender) {
+                pc.removeTrack(oldSender);
+              }
+              const sender = pc.addTrack(videoTrack, stream);
+              screenSenders.current[peerId] = sender;
+            } catch (e) {
+              console.warn(`Failed to add screen track for peer ${peerId}:`, e);
             }
           }
 
@@ -507,6 +600,8 @@ export function useWebRTC(roomId, displayName) {
     isHost: myPeerId !== '' && hostId !== '' && myPeerId === hostId,
     resolution,
     chatMessages,
+    connecting,
+    connectionError,
     toggleMic: () => muteLocalMicrophone(),
     toggleRoomMuted: () => setRoomMuted(prev => !prev),
     toggleScreenSharing,

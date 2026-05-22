@@ -68,10 +68,16 @@ export function useSignaling(roomId, displayName, onMessage) {
 
     socket.onclose = (event) => {
       console.log(`Signaling connection closed: ${event.reason} (${event.code})`);
+      if (onMessageRef.current) {
+        onMessageRef.current({ type: 'ws-closed', code: event.code, reason: event.reason });
+      }
     };
 
     socket.onerror = (error) => {
       console.error('Signaling connection error:', error);
+      if (onMessageRef.current) {
+        onMessageRef.current({ type: 'ws-error' });
+      }
     };
 
     return () => {

@@ -3,7 +3,8 @@ import { useWebRTC } from '../hooks/useWebRTC';
 import VideoGrid from '../components/VideoGrid';
 import ChatPanel from '../components/ChatPanel';
 import VoiceControls from '../components/VoiceControls';
-import { Tv, Crown, Mic, MicOff, ShieldAlert, X, Copy, Check, Sparkles } from 'lucide-react';
+import { Tv, Crown, Mic, MicOff, ShieldAlert, X, Copy, Check, Sparkles, Loader2, WifiOff } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 // Subcomponent to play remote audio streams
 function RemoteAudio({ stream, muted }) {
@@ -39,6 +40,8 @@ export default function Room({ roomId, displayName }) {
     isHost,
     resolution,
     chatMessages,
+    connecting,
+    connectionError,
     toggleMic,
     toggleRoomMuted,
     toggleScreenSharing,
@@ -50,6 +53,7 @@ export default function Room({ roomId, displayName }) {
   const [hasOpenedShareModal, setHasOpenedShareModal] = useState(false);
   const [codeCopied, setCodeCopied] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (isHost && !hasOpenedShareModal) {
@@ -57,6 +61,49 @@ export default function Room({ roomId, displayName }) {
       setHasOpenedShareModal(true);
     }
   }, [isHost, hasOpenedShareModal]);
+
+  if (connecting) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 text-white font-sans" style={{ background: '#090d16', minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui, sans-serif' }}>
+        <div className="glass-panel p-8 rounded-2xl flex flex-col items-center text-center space-y-6 glow-border animate-slide-up" style={{ width: '22rem', border: '1px solid rgba(255,255,255,0.05)', backgroundColor: 'rgba(255,255,255,0.02)', backdropFilter: 'blur(20px)', padding: '2rem', borderRadius: '16px' }}>
+          <div className="relative flex items-center justify-center w-16 h-16 bg-violet-600/10 rounded-full border border-violet-500/20" style={{ display: 'flex', width: '64px', height: '64px', borderRadius: '50%', backgroundColor: 'rgba(124, 58, 237, 0.1)', border: '1px solid rgba(124, 58, 237, 0.2)', alignItems: 'center', justifyContent: 'center' }}>
+            <Loader2 className="w-8 h-8 text-violet-400 animate-spin" style={{ color: '#a78bfa' }} />
+          </div>
+          <div>
+            <h3 className="text-xl font-bold text-white tracking-wide" style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>Entering Party</h3>
+            <p className="text-sm text-slate-400 mt-2 leading-relaxed" style={{ color: '#94a3b8', fontSize: '0.875rem' }}>
+              Setting up secure WebRTC connections. This will only take a moment...
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (connectionError) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 text-white font-sans" style={{ background: '#090d16', minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui, sans-serif' }}>
+        <div className="glass-panel p-8 rounded-2xl flex flex-col items-center text-center space-y-6 border border-rose-500/20 animate-slide-up" style={{ width: '24rem', border: '1px solid rgba(239, 68, 68, 0.2)', backgroundColor: 'rgba(255,255,255,0.02)', backdropFilter: 'blur(20px)', padding: '2rem', borderRadius: '16px', boxShadow: '0 8px 32px 0 rgba(239, 68, 68, 0.05)' }}>
+          <div className="relative flex items-center justify-center w-16 h-16 bg-rose-600/10 rounded-full border border-rose-500/20" style={{ display: 'flex', width: '64px', height: '64px', borderRadius: '50%', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', alignItems: 'center', justifyContent: 'center' }}>
+            <WifiOff className="w-8 h-8 text-rose-400" style={{ color: '#f87171' }} />
+          </div>
+          <div>
+            <h3 className="text-xl font-bold text-white tracking-wide" style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>Connection Issue</h3>
+            <p className="text-sm text-slate-400 mt-2 leading-relaxed" style={{ color: '#94a3b8', fontSize: '0.875rem' }}>
+              {connectionError}
+            </p>
+          </div>
+          <button 
+            onClick={() => navigate('/')}
+            className="btn-primary w-full py-3"
+            style={{ width: '100%', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center' }}
+          >
+            Go Back Home
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(roomId).then(() => {
