@@ -53,7 +53,48 @@ export default function Room({ roomId, displayName }) {
   const [hasOpenedShareModal, setHasOpenedShareModal] = useState(false);
   const [codeCopied, setCodeCopied] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [isChatOpen, setIsChatOpen] = useState(() => window.innerWidth >= 768);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
+    };
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      const element = document.documentElement;
+      if (element.requestFullscreen) {
+        element.requestFullscreen();
+      } else if (element.webkitRequestFullscreen) {
+        element.webkitRequestFullscreen();
+      } else if (element.msRequestFullscreen) {
+        element.msRequestFullscreen();
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      } else if (document.webkitExitFullscreen) {
+        document.webkitExitFullscreen();
+      } else if (document.msExitFullscreen) {
+        document.msExitFullscreen();
+      }
+    }
+  };
 
   useEffect(() => {
     if (isHost && !hasOpenedShareModal) {
@@ -64,7 +105,7 @@ export default function Room({ roomId, displayName }) {
 
   if (connecting) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 text-white font-sans" style={{ background: '#090d16', minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui, sans-serif' }}>
+      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 text-white font-sans" style={{ background: '#090d16', minHeight: '100vh', display: 'flex', flexDirection: 'column', itemsAlign: 'center', justifyContent: 'center', fontFamily: 'system-ui, sans-serif' }}>
         <div className="glass-panel p-8 rounded-2xl flex flex-col items-center text-center space-y-6 glow-border animate-slide-up" style={{ width: '22rem', border: '1px solid rgba(255,255,255,0.05)', backgroundColor: 'rgba(255,255,255,0.02)', backdropFilter: 'blur(20px)', padding: '2rem', borderRadius: '16px' }}>
           <div className="relative flex items-center justify-center w-16 h-16 bg-violet-600/10 rounded-full border border-violet-500/20" style={{ display: 'flex', width: '64px', height: '64px', borderRadius: '50%', backgroundColor: 'rgba(124, 58, 237, 0.1)', border: '1px solid rgba(124, 58, 237, 0.2)', alignItems: 'center', justifyContent: 'center' }}>
             <Loader2 className="w-8 h-8 text-violet-400 animate-spin" style={{ color: '#a78bfa' }} />
@@ -82,7 +123,7 @@ export default function Room({ roomId, displayName }) {
 
   if (connectionError) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 text-white font-sans" style={{ background: '#090d16', minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui, sans-serif' }}>
+      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 text-white font-sans" style={{ background: '#090d16', minHeight: '100vh', display: 'flex', flexDirection: 'column', itemsAlign: 'center', justifyContent: 'center', fontFamily: 'system-ui, sans-serif' }}>
         <div className="glass-panel p-8 rounded-2xl flex flex-col items-center text-center space-y-6 border border-rose-500/20 animate-slide-up" style={{ width: '24rem', border: '1px solid rgba(239, 68, 68, 0.2)', backgroundColor: 'rgba(255,255,255,0.02)', backdropFilter: 'blur(20px)', padding: '2rem', borderRadius: '16px', boxShadow: '0 8px 32px 0 rgba(239, 68, 68, 0.05)' }}>
           <div className="relative flex items-center justify-center w-16 h-16 bg-rose-600/10 rounded-full border border-rose-500/20" style={{ display: 'flex', width: '64px', height: '64px', borderRadius: '50%', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', alignItems: 'center', justifyContent: 'center' }}>
             <WifiOff className="w-8 h-8 text-rose-400" style={{ color: '#f87171' }} />
@@ -202,20 +243,27 @@ export default function Room({ roomId, displayName }) {
               isHost={isHost}
               hostMuteEveryone={hostMuteEveryone}
               roomId={roomId}
+              isChatOpen={isChatOpen}
+              toggleChat={() => setIsChatOpen(!isChatOpen)}
+              isFullscreen={isFullscreen}
+              toggleFullscreen={toggleFullscreen}
             />
           </div>
         </div>
 
         {/* Right Area: Chat Sidebar */}
-        <aside className="room-right">
-          <ChatPanel
-            chatMessages={chatMessages}
-            sendChatMessage={sendChatMessage}
-            peers={peers}
-            hostId={hostId}
-            myPeerId={myPeerId}
-          />
-        </aside>
+        {isChatOpen && (
+          <aside className="room-right">
+            <ChatPanel
+              chatMessages={chatMessages}
+              sendChatMessage={sendChatMessage}
+              peers={peers}
+              hostId={hostId}
+              myPeerId={myPeerId}
+              onClose={() => setIsChatOpen(false)}
+            />
+          </aside>
+        )}
       </div>
 
       {/* Hidden Audio Nodes for playing remote voice streams */}

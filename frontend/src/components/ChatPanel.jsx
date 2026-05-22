@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, Users, Crown, X } from 'lucide-react';
 
-export default function ChatPanel({ chatMessages, sendChatMessage, peers, hostId, myPeerId }) {
+export default function ChatPanel({ chatMessages, sendChatMessage, peers, hostId, myPeerId, onClose }) {
   const [text, setText] = useState('');
   const [showOnlineList, setShowOnlineList] = useState(false);
   const messagesEndRef = useRef(null);
@@ -27,14 +27,27 @@ export default function ChatPanel({ chatMessages, sendChatMessage, peers, hostId
           <Users className="w-5 h-5 text-violet-400" />
           <span className="font-semibold text-sm">Room Chat</span>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowOnlineList(!showOnlineList)}
-          className="text-xs bg-violet-500/10 hover:bg-violet-500/20 border border-violet-500/20 text-violet-400 px-2.5 py-1 rounded-full font-bold transition-all cursor-pointer flex items-center gap-1"
-          style={{ background: 'rgba(139, 92, 246, 0.1)', border: '1px solid rgba(139, 92, 246, 0.2)', cursor: 'pointer' }}
-        >
-          <span>{peers.length} online</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowOnlineList(!showOnlineList)}
+            className="text-xs bg-violet-500/10 hover:bg-violet-500/20 border border-violet-500/20 text-violet-400 px-2.5 py-1 rounded-full font-bold transition-all cursor-pointer flex items-center gap-1"
+            style={{ background: 'rgba(139, 92, 246, 0.1)', border: '1px solid rgba(139, 92, 246, 0.2)', cursor: 'pointer' }}
+          >
+            <span>{peers.length} online</span>
+          </button>
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-slate-400 hover:text-white p-1 rounded hover:bg-white/5 transition-all cursor-pointer flex items-center justify-center"
+              style={{ background: 'transparent', border: 'none' }}
+              title="Close Chat"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Online Users List Dropdown/Popover */}

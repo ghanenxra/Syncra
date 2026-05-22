@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Mic, MicOff, Monitor, MonitorOff, Copy, LogOut, VolumeX, Volume2, Check } from 'lucide-react';
+import { Mic, MicOff, Monitor, MonitorOff, Copy, LogOut, VolumeX, Volume2, Check, MessageSquare, Maximize, Minimize } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export default function VoiceControls({
@@ -11,7 +11,11 @@ export default function VoiceControls({
   toggleScreenSharing,
   isHost,
   hostMuteEveryone,
-  roomId
+  roomId,
+  isChatOpen,
+  toggleChat,
+  isFullscreen,
+  toggleFullscreen
 }) {
   const [copied, setCopied] = useState(false);
   const navigate = useNavigate();
@@ -30,24 +34,25 @@ export default function VoiceControls({
   };
 
   return (
-    <div className="glass-panel px-6 py-3 flex items-center justify-between gap-4 border border-white/5 bg-white/2">
+    <div className="voice-controls-panel">
       {/* Left: Invite link */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 controls-left">
         <div className="flex flex-col">
-          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest leading-none mb-1">Room Code</span>
-          <span className="text-sm font-extrabold text-violet-400 tracking-wider leading-none">{roomId}</span>
+          <span className="text-[9px] text-slate-500 font-bold uppercase tracking-widest leading-none mb-1 room-code-label">Room Code</span>
+          <span className="text-xs font-extrabold text-violet-400 tracking-wider leading-none">{roomId}</span>
         </div>
         <button
           onClick={handleCopyLink}
           className="btn-icon text-slate-300 hover:text-white"
+          style={{ width: '32px', height: '32px', borderRadius: '6px' }}
           title="Copy Invite Link"
         >
-          {copied ? <Check className="w-5 h-5 text-emerald-400" /> : <Copy className="w-5 h-5" />}
+          {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
         </button>
       </div>
 
-      {/* Center: Audio/Video Controls */}
-      <div className="flex items-center gap-3">
+      {/* Center: Audio/Video/Chat/Fullscreen Controls */}
+      <div className="flex items-center gap-2.5">
         {/* Toggle Mic */}
         <button
           onClick={toggleMic}
@@ -81,23 +86,43 @@ export default function VoiceControls({
         {isHost && (
           <button
             onClick={hostMuteEveryone}
-            className="btn-icon text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 border-rose-500/20"
+            className="btn-mute-everyone text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 border-rose-500/20 flex items-center gap-1.5 px-3"
             title="Mute Everyone"
           >
-            <MicOff className="w-5 h-5" />
+            <MicOff className="w-4 h-4" />
+            <span className="text-[10px] font-bold uppercase tracking-wide mute-all-text">Mute All</span>
           </button>
         )}
+
+        {/* Chat Toggle */}
+        <button
+          onClick={toggleChat}
+          className={`btn-icon ${isChatOpen ? 'active' : 'text-slate-300 hover:text-white'}`}
+          title={isChatOpen ? 'Hide Chat' : 'Show Chat'}
+        >
+          <MessageSquare className="w-5 h-5" />
+        </button>
+
+        {/* Fullscreen Toggle */}
+        <button
+          onClick={toggleFullscreen}
+          className={`btn-icon ${isFullscreen ? 'active' : 'text-slate-300 hover:text-white'}`}
+          title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+        >
+          {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
+        </button>
       </div>
 
       {/* Right: Leave room */}
       <div>
         <button
           onClick={handleLeave}
-          className="btn-danger flex items-center gap-2 py-2 px-4 text-sm"
+          className="btn-danger flex items-center gap-2 py-2 px-3 text-xs"
+          style={{ height: '36px', padding: '0 12px' }}
           title="Leave Room"
         >
           <LogOut className="w-4 h-4" />
-          <span>Leave</span>
+          <span className="leave-text">Leave</span>
         </button>
       </div>
     </div>
