@@ -27,7 +27,7 @@ export default function VideoGrid({ localScreenStream, remoteStreams, hostId, is
           ref={videoRef}
           autoPlay
           playsInline
-          muted={isHost} // Mute local stream to prevent local audio loopbacks
+          muted={true} // Mute stream for everyone to prevent browser autoplay blocking
           className="w-full h-full object-contain"
         />
       ) : (

@@ -28,6 +28,7 @@ export default function Room({ roomId, displayName }) {
   const {
     peers,
     remoteStreams,
+    remoteVideoStreams,
     localMicStream,
     localScreenStream,
     micMuted,
@@ -112,7 +113,7 @@ export default function Room({ roomId, displayName }) {
           <div className="flex-1" style={{ minHeight: 0 }}>
             <VideoGrid
               localScreenStream={localScreenStream}
-              remoteStreams={remoteStreams}
+              remoteStreams={remoteVideoStreams}
               hostId={hostId}
               isHost={isHost}
             />
