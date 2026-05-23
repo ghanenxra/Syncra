@@ -18,14 +18,15 @@ export function useWebRTC(roomId, displayName) {
   const [connecting, setConnecting] = useState(true);
   const [connectionError, setConnectionError] = useState(null);
 
-  const pcs = useRef({}); // peerId -> RTCPeerConnection
-  const screenSenders = useRef({}); // peerId -> RTCRtpSender
-  const makingOffers = useRef({}); // peerId -> boolean
+  const pc = useRef(null); // SINGLE RTCPeerConnection to Cloudflare Calls SFU
+  const sessionIdRef = useRef(''); // Local Cloudflare Session ID
+  const midToTrackMap = useRef({}); // mid -> { peerId, trackName }
 
   const localScreenStreamRef = useRef(null);
   const localCameraStreamRef = useRef(null);
   const myPeerIdRef = useRef('');
   const hostIdRef = useRef('');
+  const peersRef = useRef([]);
 
   useEffect(() => {
     localScreenStreamRef.current = localScreenStream;
@@ -43,7 +44,11 @@ export function useWebRTC(roomId, displayName) {
     hostIdRef.current = hostId;
   }, [hostId]);
 
-  // Static ICE Servers configuration
+  useEffect(() => {
+    peersRef.current = peers;
+  }, [peers]);
+
+  // Static ICE Servers configuration (used to connect to Cloudflare)
   const getIceServers = () => [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
@@ -64,6 +69,24 @@ export function useWebRTC(roomId, displayName) {
     }
   ];
 
+  // Creates a dark placeholder track to publish when camera is not present
+  const createBlankVideoTrack = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 480;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#0c0b14';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '20px Outfit, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Camera Offline', canvas.width / 2, canvas.height / 2);
+
+    const stream = canvas.captureStream(30);
+    return stream.getVideoTracks()[0];
+  };
+
   // Helper to initialize local microphone (and camera video if Host)
   const initLocalMedia = async (isHostUser) => {
     try {
@@ -79,9 +102,9 @@ export function useWebRTC(roomId, displayName) {
           audioStream = new MediaStream(combinedStream.getAudioTracks());
           cameraStream = new MediaStream(combinedStream.getVideoTracks());
         } catch (err) {
-          console.warn('Failed to access camera, fallback to audio only:', err);
+          console.warn('Failed to access camera, fallback to mock black track:', err);
           audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-          cameraStream = null;
+          cameraStream = new MediaStream([createBlankVideoTrack()]);
         }
 
         if (micMuted) {
@@ -103,8 +126,7 @@ export function useWebRTC(roomId, displayName) {
         return { audioStream, cameraStream: null };
       }
     } catch (err) {
-      console.error('Failed to access media devices:', err);
-      // Fallback mock audio context stream
+      console.error('Failed to access media devices, generating mock audio:', err);
       const mockCtx = new (window.AudioContext || window.webkitAudioContext)();
       const mockOsc = mockCtx.createOscillator();
       const mockDst = mockCtx.createMediaStreamDestination();
@@ -115,14 +137,16 @@ export function useWebRTC(roomId, displayName) {
         if (audioTrack) audioTrack.enabled = false;
       }
       setLocalMicStream(audioStream);
-      return { audioStream: audioStream, cameraStream: null };
+      return { audioStream, cameraStream: null };
     }
   };
 
-  // Helper to clean up all peer connections
+  // Helper to clean up connection
   const cleanUp = useCallback(() => {
-    Object.values(pcs.current).forEach(pc => pc.close());
-    pcs.current = {};
+    if (pc.current) {
+      pc.current.close();
+      pc.current = null;
+    }
     if (localMicStream) {
       localMicStream.getTracks().forEach(t => t.stop());
     }
@@ -134,169 +158,101 @@ export function useWebRTC(roomId, displayName) {
     }
   }, [localMicStream, localScreenStream]);
 
-  // Create RTCPeerConnection for a remote peer
-  const createPeerConnection = async (peerId, remoteName, isInitiator, audioStream, videoStream) => {
-    if (pcs.current[peerId]) {
-      pcs.current[peerId].close();
+  // Request Cloudflare subscription for remote tracks list
+  const subscribeToTracks = (tracksList) => {
+    if (!tracksList || tracksList.length === 0) return;
+    
+    // Filter out our own tracks
+    const remoteTracks = tracksList.filter(t => t.sessionId !== sessionIdRef.current && t.sessionId !== myPeerIdRef.current);
+    if (remoteTracks.length === 0) return;
+
+    console.log('Subscribing to remote tracks:', remoteTracks);
+    sendMessage({
+      type: 'cf-subscribe-tracks',
+      tracks: remoteTracks.map(t => ({
+        location: 'remote',
+        sessionId: t.sessionId,
+        trackId: t.trackId,
+        trackName: t.trackName
+      }))
+    });
+  };
+
+  // Triggers ICE restart with Cloudflare Calls SFU
+  const handleIceRestart = async () => {
+    if (!pc.current) return;
+    console.warn('WebRTC connection state lost. Initiating ICE restart renegotiation...');
+    try {
+      pc.current.restartIce();
+      const offer = await pc.current.createOffer({ iceRestart: true });
+      await pc.current.setLocalDescription(offer);
+      sendMessage({
+        type: 'cf-renegotiate',
+        sdp: pc.current.localDescription.sdp,
+        sdpType: 'offer'
+      });
+    } catch (e) {
+      console.error('Failed to perform ICE restart renegotiation:', e);
     }
+  };
 
-    const configIce = getIceServers();
-    const pc = new RTCPeerConnection({ iceServers: configIce });
-    pcs.current[peerId] = pc;
-    makingOffers.current[peerId] = false;
-
-    const isActuallyHost = myPeerIdRef.current && hostIdRef.current && myPeerIdRef.current === hostIdRef.current;
-
-    // Attach local audio/video based on Host/Guest constraints
-    if (isActuallyHost) {
-      // Host audio
-      if (audioStream) {
-        audioStream.getTracks().forEach(track => {
-          pc.addTrack(track, audioStream);
-        });
-      }
-      // Host video
-      const activeVideoTrack = videoStream ? videoStream.getVideoTracks()[0] : null;
-      if (activeVideoTrack) {
-        try {
-          const sender = pc.addTrack(activeVideoTrack, videoStream);
-          screenSenders.current[peerId] = sender;
-        } catch (e) {
-          console.warn('Failed to add Host video track:', e);
-        }
-      }
-    } else {
-      // Guest strictly audio only
-      if (audioStream) {
-        audioStream.getTracks().forEach(track => {
-          pc.addTrack(track, audioStream);
-        });
-      }
-      // Add receive-only video transceiver for Guest
-      try {
-        pc.addTransceiver('video', { direction: 'recvonly' });
-      } catch (e) {
-        console.warn('Failed to add receive-only video transceiver:', e);
-      }
-    }
-
-    // ICE gathering callback
-    pc.onicecandidate = (event) => {
+  // Setup Peer Connection event handlers
+  const setupPeerConnection = (pcInstance) => {
+    // ICE candidate discovery
+    pcInstance.onicecandidate = (event) => {
+      // Cloudflare Calls handles ICE candidate gathering on session description exchange,
+      // but standard ICE candidates are forwarded to ensure stability.
       if (event.candidate) {
         sendMessage({
           type: 'ice-candidate',
-          to: peerId,
           candidate: event.candidate
         });
       }
     };
 
-    // Track arrival callback (Demuxing audio/video independently)
-    pc.ontrack = (event) => {
-      const remoteStream = event.streams[0] || (event.track ? new MediaStream([event.track]) : null);
-      if (!remoteStream) return;
+    // Track arrival (demuxing remote feeds from Cloudflare)
+    pcInstance.ontrack = (event) => {
+      const mid = event.transceiver.mid;
+      const trackInfo = midToTrackMap.current[mid];
+      const peerId = trackInfo ? trackInfo.peerId : 'unknown';
+      const trackName = trackInfo ? trackInfo.trackName : (event.track.kind === 'video' ? 'video-cam' : 'audio-mic');
 
+      console.log(`Track arrived: kind=${event.track.kind}, mid=${mid}, peer=${peerId}, name=${trackName}`);
+
+      const remoteStream = event.streams[0] || new MediaStream([event.track]);
+      
       if (event.track.kind === 'audio') {
-        console.log(`Audio track arrived from peer ${peerId}`);
         setRemoteStreams(prev => ({ ...prev, [peerId]: remoteStream }));
-
-        const tracks = remoteStream.getAudioTracks();
-        if (event.track && !tracks.includes(event.track)) {
-          tracks.push(event.track);
-        }
-        tracks.forEach(track => {
-          track.onended = () => {
-            console.log(`Audio track ended for peer ${peerId}`);
-            setRemoteStreams(prev => {
-              const next = { ...prev };
-              delete next[peerId];
-              return next;
-            });
-          };
-        });
-      }
-
-      if (event.track.kind === 'video') {
-        console.log(`Video track arrived from peer ${peerId}`);
+        
+        event.track.onended = () => {
+          console.log(`Audio track ended for peer ${peerId}`);
+          setRemoteStreams(prev => {
+            const next = { ...prev };
+            delete next[peerId];
+            return next;
+          });
+        };
+      } else if (event.track.kind === 'video') {
         setRemoteVideoStreams(prev => ({ ...prev, [peerId]: remoteStream }));
 
-        const tracks = remoteStream.getVideoTracks();
-        if (event.track && !tracks.includes(event.track)) {
-          tracks.push(event.track);
-        }
-        tracks.forEach(track => {
-          track.onended = () => {
-            console.log(`Video track ended for peer ${peerId}`);
-            setRemoteVideoStreams(prev => {
-              const next = { ...prev };
-              delete next[peerId];
-              return next;
-            });
-          };
-        });
+        event.track.onended = () => {
+          console.log(`Video track ended for peer ${peerId}`);
+          setRemoteVideoStreams(prev => {
+            const next = { ...prev };
+            delete next[peerId];
+            return next;
+          });
+        };
       }
     };
 
-    // Self-Healing & ICE Reconnection State Machine
-    pc.onconnectionstatechange = () => {
-      console.log(`Connection state change with ${remoteName}:`, pc.connectionState);
-      if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-        console.warn(`Connection with ${remoteName} lost. Initiating ICE restart...`);
-        try {
-          pc.restartIce();
-          
-          if (!isActuallyHost) {
-            // Guests notify host that renegotiation is required
-            sendMessage({
-              type: 'ice-restart-needed',
-              to: hostIdRef.current
-            });
-          }
-        } catch (e) {
-          console.error(`Failed to restart ICE for peer ${peerId}:`, e);
-        }
-      }
-
-      if (pc.connectionState === 'closed') {
-        pc.close();
-        delete pcs.current[peerId];
-        delete screenSenders.current[peerId];
-        setRemoteStreams(prev => {
-          const next = { ...prev };
-          delete next[peerId];
-          return next;
-        });
-        setRemoteVideoStreams(prev => {
-          const next = { ...prev };
-          delete next[peerId];
-          return next;
-        });
+    // Connection Health Monitor
+    pcInstance.onconnectionstatechange = () => {
+      console.log('WebRTC connection state changed:', pcInstance.connectionState);
+      if (pcInstance.connectionState === 'disconnected' || pcInstance.connectionState === 'failed') {
+        handleIceRestart();
       }
     };
-
-    // Perfect Negotiation pattern
-    pc.onnegotiationneeded = async () => {
-      try {
-        makingOffers.current[peerId] = true;
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        sendMessage({
-          type: 'offer',
-          to: peerId,
-          sdp: pc.localDescription.sdp
-        });
-      } catch (err) {
-        console.error(`Negotiation needed failed for peer ${peerId}:`, err);
-      } finally {
-        makingOffers.current[peerId] = false;
-      }
-    };
-
-    if (isInitiator) {
-      // Let onnegotiationneeded naturally trigger the initial offer
-    }
-
-    return pc;
   };
 
   // Handle incoming signaling messages
@@ -309,27 +265,167 @@ export function useWebRTC(roomId, displayName) {
         setHostId(msg.hostId);
         setResolution(msg.resolution);
         
-        // Save own state
+        // Populate peer lists
+        const isHostUser = msg.from === msg.hostId;
         const updatedPeers = [
-          { id: msg.from, displayName: displayName, isHost: msg.from === msg.hostId },
+          { id: msg.from, displayName: displayName, isHost: isHostUser },
           ...msg.peers
         ];
         setPeers(updatedPeers);
 
-        // Get local devices
-        const isHostUser = msg.from === msg.hostId;
+        // Get local streams
         const { audioStream, cameraStream } = await initLocalMedia(isHostUser);
 
-        // Connect to existing peers (we initiate to them)
-        for (const peer of msg.peers) {
-          const activeVideoStream = isHostUser ? cameraStream : null;
-          await createPeerConnection(peer.id, peer.displayName, true, audioStream, activeVideoStream);
+        // Create the single peer connection to Cloudflare
+        const configIce = getIceServers();
+        const localPc = new RTCPeerConnection({ iceServers: configIce });
+        pc.current = localPc;
+        setupPeerConnection(localPc);
+
+        // Add local tracks (Host: mic + camera/mock; Guest: mic + recvonly video)
+        if (audioStream) {
+          audioStream.getTracks().forEach(track => localPc.addTrack(track, audioStream));
         }
 
-        // Broadcast our current mute status to the room
-        sendMessage({
-          type: 'mute-status',
-          muted: micMuted
+        if (isHostUser) {
+          const activeVideoTrack = cameraStream ? cameraStream.getVideoTracks()[0] : null;
+          if (activeVideoTrack) {
+            localPc.addTrack(activeVideoTrack, cameraStream);
+          }
+        } else {
+          localPc.addTransceiver('video', { direction: 'recvonly' });
+        }
+
+        // Create local session offer and send to Cloudflare
+        try {
+          const offer = await localPc.createOffer();
+          await localPc.setLocalDescription(offer);
+          sendMessage({
+            type: 'cf-create-session',
+            sdp: localPc.localDescription.sdp
+          });
+        } catch (err) {
+          console.error('Failed to create local Cloudflare session offer:', err);
+        }
+        break;
+
+      case 'cf-session-created':
+        sessionIdRef.current = msg.sessionId;
+        console.log('Cloudflare WebRTC session created:', msg.sessionId);
+        
+        // Complete handshake
+        if (pc.current) {
+          try {
+            await pc.current.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp }));
+          } catch (err) {
+            console.error('Failed to set remote session description answer:', err);
+          }
+
+          // Publish our tracks to Cloudflare
+          const tracksToPublish = [];
+          pc.current.getSenders().forEach(sender => {
+            if (sender.track) {
+              tracksToPublish.push({
+                location: 'local',
+                mid: sender.track.kind === 'video' ? '1' : '0',
+                trackName: sender.track.kind === 'video' ? 'video-cam' : 'audio-mic'
+              });
+            }
+          });
+
+          if (tracksToPublish.length > 0) {
+            sendMessage({
+              type: 'cf-publish-tracks',
+              tracks: tracksToPublish
+            });
+          }
+        }
+
+        // Guests subscribe to any existing tracks in the room
+        const isMeHost = myPeerIdRef.current === hostIdRef.current;
+        if (!isMeHost && msg.tracks && msg.tracks.length > 0) {
+          subscribeToTracks(msg.tracks);
+        }
+        break;
+
+      case 'cf-tracks-published':
+        console.log('Published local tracks successfully:', msg.tracks);
+        break;
+
+      case 'peer-published-tracks':
+        console.log('Peer published tracks:', msg.from, msg.tracks);
+        // Map published tracks to peer Details
+        setPeers(prev => prev.map(p => {
+          if (p.id === msg.from) {
+            return { ...p, publishedTracks: msg.tracks, sessionId: msg.sessionId };
+          }
+          return p;
+        }));
+
+        // Subscribe to these remote tracks
+        subscribeToTracks(msg.tracks.map(t => ({
+          sessionId: msg.sessionId,
+          trackId: t.trackId,
+          trackName: t.trackName
+        })));
+        break;
+
+      case 'cf-tracks-subscribed':
+        console.log('Received subscription offer for remote tracks');
+        msg.tracks.forEach(t => {
+          const publishingPeer = peersRef.current.find(p => p.sessionId === t.sessionId || p.id === t.sessionId);
+          const peerId = publishingPeer ? publishingPeer.id : 'unknown';
+          midToTrackMap.current[t.mid] = { peerId, trackName: t.trackName };
+        });
+
+        // Set remote offer and reply with local description answer
+        if (pc.current) {
+          try {
+            await pc.current.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: msg.sdp }));
+            const answer = await pc.current.createAnswer();
+            await pc.current.setLocalDescription(answer);
+            sendMessage({
+              type: 'cf-renegotiate',
+              sdp: pc.current.localDescription.sdp,
+              sdpType: 'answer'
+            });
+          } catch (err) {
+            console.error('Failed to subscribe remote tracks:', err);
+          }
+        }
+        break;
+
+      case 'cf-renegotiated':
+        if (msg.sdp && pc.current) {
+          console.log('Completing local-initiated renegotiation...');
+          try {
+            await pc.current.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp }));
+          } catch (err) {
+            console.error('Failed to set remote description on renegotiated answer:', err);
+          }
+        }
+        break;
+
+      case 'peer-closed-tracks':
+        console.log('Peer closed tracks:', msg.from, msg.tracks);
+        msg.tracks.forEach(t => {
+          Object.entries(midToTrackMap.current).forEach(([mid, info]) => {
+            if (info.peerId === msg.from) {
+              if (info.trackName === 'video-cam') {
+                setRemoteVideoStreams(prev => {
+                  const next = { ...prev };
+                  delete next[msg.from];
+                  return next;
+                });
+              } else if (info.trackName === 'audio-mic') {
+                setRemoteStreams(prev => {
+                  const next = { ...prev };
+                  delete next[msg.from];
+                  return next;
+                });
+              }
+            }
+          });
         });
         break;
 
@@ -349,84 +445,6 @@ export function useWebRTC(roomId, displayName) {
           }
           return p;
         }));
-        break;
-
-      case 'offer':
-        let pcOffer = pcs.current[msg.from];
-        const isHostMe = myPeerIdRef.current === hostIdRef.current;
-        if (!pcOffer) {
-          const activeVideoStream = isHostMe ? (localScreenStreamRef.current || localCameraStreamRef.current) : null;
-          pcOffer = await createPeerConnection(msg.from, 'Peer', false, localMicStream, activeVideoStream);
-        }
-
-        // Perfect Negotiation Collision Resolution
-        const polite = !isHostMe;
-        const collision = makingOffers.current[msg.from] || pcOffer.signalingState !== 'stable';
-        const ignoreOffer = !polite && collision;
-
-        if (ignoreOffer) {
-          console.log(`[Perfect Negotiation] Host ignoring colliding offer from peer ${msg.from}`);
-          break;
-        }
-
-        try {
-          if (collision) {
-            console.log(`[Perfect Negotiation] Guest rolling back colliding offer for peer ${msg.from}`);
-            await pcOffer.setLocalDescription({ type: 'rollback' });
-          }
-          await pcOffer.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: msg.sdp }));
-          const answer = await pcOffer.createAnswer();
-          await pcOffer.setLocalDescription(answer);
-          sendMessage({
-            type: 'answer',
-            to: msg.from,
-            sdp: pcOffer.localDescription.sdp
-          });
-        } catch (err) {
-          console.error('Failed to handle offer:', err);
-        }
-        break;
-
-      case 'answer':
-        const pcAnswer = pcs.current[msg.from];
-        if (pcAnswer) {
-          try {
-            await pcAnswer.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp }));
-          } catch (err) {
-            console.error('Failed to set remote description on answer:', err);
-          }
-        }
-        break;
-
-      case 'ice-candidate':
-        const pcCandidate = pcs.current[msg.from];
-        if (pcCandidate) {
-          try {
-            await pcCandidate.addIceCandidate(new RTCIceCandidate(msg.candidate));
-          } catch (err) {
-            console.error('Failed to add ICE candidate:', err);
-          }
-        }
-        break;
-
-      case 'ice-restart-needed':
-        if (myPeerIdRef.current === hostIdRef.current) {
-          console.log(`Host received ICE restart request from guest peer: ${msg.from}`);
-          const pcToRestart = pcs.current[msg.from];
-          if (pcToRestart) {
-            try {
-              const offer = await pcToRestart.createOffer({ iceRestart: true });
-              await pcToRestart.setLocalDescription(offer);
-              sendMessage({
-                type: 'offer',
-                to: msg.from,
-                sdp: pcToRestart.localDescription.sdp
-              });
-            } catch (err) {
-              console.error(`Failed to negotiate ICE restart for guest ${msg.from}:`, err);
-            }
-          }
-        }
         break;
 
       case 'chat':
@@ -454,12 +472,6 @@ export function useWebRTC(roomId, displayName) {
 
       case 'peer-left':
         const leavingId = msg.from;
-        if (pcs.current[leavingId]) {
-          pcs.current[leavingId].close();
-          delete pcs.current[leavingId];
-          delete screenSenders.current[leavingId];
-          delete makingOffers.current[leavingId];
-        }
         setPeers(prev => prev.filter(p => p.id !== leavingId));
         setRemoteStreams(prev => {
           const next = { ...prev };
@@ -540,16 +552,13 @@ export function useWebRTC(roomId, displayName) {
 
     const cameraTrack = localCameraStreamRef.current ? localCameraStreamRef.current.getVideoTracks()[0] : null;
 
-    for (const peerId of Object.keys(pcs.current)) {
-      const pc = pcs.current[peerId];
-      if (pc) {
-        const videoSender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
-        if (videoSender) {
-          try {
-            await videoSender.replaceTrack(cameraTrack);
-          } catch (e) {
-            console.warn(`Failed to replace track back to camera for peer ${peerId}:`, e);
-          }
+    if (pc.current) {
+      const videoSender = pc.current.getSenders().find(s => s.track && s.track.kind === 'video');
+      if (videoSender) {
+        try {
+          await videoSender.replaceTrack(cameraTrack);
+        } catch (e) {
+          console.warn('Failed to replace track back to camera:', e);
         }
       }
     }
@@ -582,24 +591,14 @@ export function useWebRTC(roomId, displayName) {
 
         const screenTrack = stream.getVideoTracks()[0];
 
-        // Replace track for all active peer connections
-        for (const peerId of Object.keys(pcs.current)) {
-          const pc = pcs.current[peerId];
-          if (pc) {
-            const videoSender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
-            if (videoSender && screenTrack) {
-              try {
-                await videoSender.replaceTrack(screenTrack);
-              } catch (e) {
-                console.warn(`Failed to replace track with screen for peer ${peerId}:`, e);
-              }
-            } else if (screenTrack) {
-              try {
-                const sender = pc.addTrack(screenTrack, stream);
-                screenSenders.current[peerId] = sender;
-              } catch (e) {
-                console.warn(`Failed to add screen track for peer ${peerId}:`, e);
-              }
+        // Replace track on the video sender
+        if (pc.current) {
+          const videoSender = pc.current.getSenders().find(s => s.track && s.track.kind === 'video');
+          if (videoSender && screenTrack) {
+            try {
+              await videoSender.replaceTrack(screenTrack);
+            } catch (e) {
+              console.warn('Failed to replace track with screen share:', e);
             }
           }
         }

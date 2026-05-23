@@ -11,6 +11,15 @@ type PeerInfo struct {
 	IsHost      bool   `json:"isHost"`
 }
 
+// TrackInfo represents WebRTC media track details for Cloudflare Calls.
+type TrackInfo struct {
+	Location  string `json:"location,omitempty"`
+	Mid       string `json:"mid,omitempty"`
+	TrackName string `json:"trackName,omitempty"`
+	TrackID   string `json:"trackId,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
+}
+
 // Message represents a WebSocket signaling or chat message.
 type Message struct {
 	Type        string                 `json:"type"`
@@ -27,6 +36,9 @@ type Message struct {
 	IsHost      bool                   `json:"isHost,omitempty"`
 	Muted       bool                   `json:"muted,omitempty"`
 	Message     string                 `json:"message,omitempty"` // For errors
+	SessionID   string                 `json:"sessionId,omitempty"`
+	Tracks      []TrackInfo            `json:"tracks,omitempty"`
+	SdpType     string                 `json:"sdpType,omitempty"`
 }
 
 // Hub maintains the state of active rooms and clients.
@@ -122,6 +134,17 @@ func (h *Hub) handleRegister(c *Client) {
 		}
 	}
 
+	// Collect all active published tracks in the room
+	activeTracks := make([]TrackInfo, 0)
+	for id, client := range room.Clients {
+		if id != c.ID {
+			for _, track := range client.PublishedTracks {
+				track.SessionID = client.SessionID
+				activeTracks = append(activeTracks, track)
+			}
+		}
+	}
+
 	// Notify the new client they've joined
 	c.Send <- Message{
 		Type:       "joined",
@@ -130,6 +153,7 @@ func (h *Hub) handleRegister(c *Client) {
 		HostID:     room.HostID,
 		Resolution: room.Resolution,
 		Peers:      peers,
+		Tracks:     activeTracks,
 	}
 
 	// Notify everyone else in the room

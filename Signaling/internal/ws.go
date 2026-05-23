@@ -1,22 +1,27 @@
 package internal
-
+ 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"time"
-
+ 
 	"github.com/gorilla/websocket"
 )
-
+ 
 const (
 	writeWait      = 10 * time.Second
 	pongWait       = 60 * time.Second
 	pingPeriod     = (pongWait * 9) / 10
 	maxMessageSize = 512 * 1024 // 512 KB (SDPs can be large)
 )
-
+ 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
@@ -24,15 +29,17 @@ var upgrader = websocket.Upgrader{
 		return true // Allow cross-origin connection
 	},
 }
-
+ 
 // Client represents a connected WebSocket peer.
 type Client struct {
-	Hub         *Hub
-	Conn        *websocket.Conn
-	Send        chan Message
-	ID          string
-	RoomID      string
-	DisplayName string
+	Hub             *Hub
+	Conn            *websocket.Conn
+	Send            chan Message
+	ID              string
+	RoomID          string
+	DisplayName     string
+	SessionID       string
+	PublishedTracks []TrackInfo
 }
 
 // NewClient creates a new Client instance.
@@ -155,6 +162,194 @@ func (c *Client) readPump() {
 
 		case "leave":
 			return
+
+		case "cf-create-session":
+			type SessionReq struct {
+				SessionDescription struct {
+					Type string `json:"type"`
+					Sdp  string `json:"sdp"`
+				} `json:"sessionDescription"`
+			}
+			type SessionResp struct {
+				SessionID          string `json:"sessionId"`
+				SessionDescription struct {
+					Type string `json:"type"`
+					Sdp  string `json:"sdp"`
+				} `json:"sessionDescription"`
+			}
+
+			reqPayload := SessionReq{}
+			reqPayload.SessionDescription.Type = "offer"
+			reqPayload.SessionDescription.Sdp = msg.Sdp
+
+			var respPayload SessionResp
+			err := callCloudflareAPI("/sessions/new", "POST", reqPayload, &respPayload)
+			if err != nil {
+				log.Printf("Cloudflare /sessions/new failed for client %s: %v", c.ID, err)
+				c.Send <- Message{Type: "error", Message: fmt.Sprintf("Cloudflare session creation failed: %v", err)}
+				continue
+			}
+
+			c.SessionID = respPayload.SessionID
+			c.Send <- Message{
+				Type:      "cf-session-created",
+				SessionID: respPayload.SessionID,
+				Sdp:       respPayload.SessionDescription.Sdp,
+			}
+
+		case "cf-publish-tracks":
+			if c.SessionID == "" {
+				c.Send <- Message{Type: "error", Message: "Session not initialized"}
+				continue
+			}
+			type TracksReq struct {
+				Tracks []TrackInfo `json:"tracks"`
+			}
+			type TracksResp struct {
+				Tracks []TrackInfo `json:"tracks"`
+			}
+
+			reqPayload := TracksReq{Tracks: msg.Tracks}
+			var respPayload TracksResp
+			path := fmt.Sprintf("/sessions/%s/tracks/new", c.SessionID)
+			err := callCloudflareAPI(path, "POST", reqPayload, &respPayload)
+			if err != nil {
+				log.Printf("Cloudflare /tracks/new (publish) failed for client %s: %v", c.ID, err)
+				c.Send <- Message{Type: "error", Message: fmt.Sprintf("Cloudflare publish failed: %v", err)}
+				continue
+			}
+
+			c.PublishedTracks = respPayload.Tracks
+			c.Send <- Message{
+				Type:   "cf-tracks-published",
+				Tracks: respPayload.Tracks,
+			}
+
+			// Broadcast the newly published tracks to other clients in the room
+			c.Hub.BroadcastToRoomExcept(c.RoomID, c.ID, Message{
+				Type:        "peer-published-tracks",
+				From:        c.ID,
+				DisplayName: c.DisplayName,
+				IsHost:      c.Hub.rooms[c.RoomID].HostID == c.ID,
+				Tracks:      respPayload.Tracks,
+				SessionID:   c.SessionID,
+			})
+
+		case "cf-subscribe-tracks":
+			if c.SessionID == "" {
+				c.Send <- Message{Type: "error", Message: "Session not initialized"}
+				continue
+			}
+			type SubscribeReq struct {
+				Tracks []TrackInfo `json:"tracks"`
+			}
+			type SubscribeResp struct {
+				SessionDescription struct {
+					Type string `json:"type"`
+					Sdp  string `json:"sdp"`
+				} `json:"sessionDescription"`
+				RequiresImmediateRenegotiation bool        `json:"requiresImmediateRenegotiation"`
+				Tracks                         []TrackInfo `json:"tracks"`
+			}
+
+			reqPayload := SubscribeReq{Tracks: msg.Tracks}
+			var respPayload SubscribeResp
+			path := fmt.Sprintf("/sessions/%s/tracks/new", c.SessionID)
+			err := callCloudflareAPI(path, "POST", reqPayload, &respPayload)
+			if err != nil {
+				log.Printf("Cloudflare /tracks/new (subscribe) failed for client %s: %v", c.ID, err)
+				c.Send <- Message{Type: "error", Message: fmt.Sprintf("Cloudflare subscription failed: %v", err)}
+				continue
+			}
+
+			c.Send <- Message{
+				Type:   "cf-tracks-subscribed",
+				Sdp:    respPayload.SessionDescription.Sdp,
+				Tracks: respPayload.Tracks,
+			}
+
+		case "cf-renegotiate":
+			if c.SessionID == "" {
+				c.Send <- Message{Type: "error", Message: "Session not initialized"}
+				continue
+			}
+			type RenegotiateReq struct {
+				SessionDescription struct {
+					Type string `json:"type"`
+					Sdp  string `json:"sdp"`
+				} `json:"sessionDescription"`
+			}
+			type RenegotiateResp struct {
+				SessionDescription struct {
+					Type string `json:"type"`
+					Sdp  string `json:"sdp"`
+				} `json:"sessionDescription"`
+			}
+
+			sdpType := msg.SdpType
+			if sdpType == "" {
+				sdpType = "answer"
+			}
+
+			reqPayload := RenegotiateReq{}
+			reqPayload.SessionDescription.Type = sdpType
+			reqPayload.SessionDescription.Sdp = msg.Sdp
+
+			var respPayload RenegotiateResp
+			path := fmt.Sprintf("/sessions/%s/renegotiate", c.SessionID)
+			err := callCloudflareAPI(path, "PUT", reqPayload, &respPayload)
+			if err != nil {
+				log.Printf("Cloudflare /renegotiate failed for client %s: %v", c.ID, err)
+				c.Send <- Message{Type: "error", Message: fmt.Sprintf("Cloudflare renegotiation failed: %v", err)}
+				continue
+			}
+
+			c.Send <- Message{
+				Type: "cf-renegotiated",
+				Sdp:  respPayload.SessionDescription.Sdp,
+			}
+
+		case "cf-close-track":
+			if c.SessionID == "" {
+				c.Send <- Message{Type: "error", Message: "Session not initialized"}
+				continue
+			}
+			type CloseReq struct {
+				Tracks []TrackInfo `json:"tracks"`
+			}
+			type CloseResp struct{}
+
+			reqPayload := CloseReq{Tracks: msg.Tracks}
+			var respPayload CloseResp
+			path := fmt.Sprintf("/sessions/%s/tracks/close", c.SessionID)
+			err := callCloudflareAPI(path, "PUT", reqPayload, &respPayload)
+			if err != nil {
+				log.Printf("Cloudflare /tracks/close failed for client %s: %v", c.ID, err)
+				continue
+			}
+
+			// Remove closed tracks from PublishedTracks
+			remaining := make([]TrackInfo, 0)
+			for _, published := range c.PublishedTracks {
+				closed := false
+				for _, toClose := range msg.Tracks {
+					if published.TrackID == toClose.TrackID {
+						closed = true
+						break
+					}
+				}
+				if !closed {
+					remaining = append(remaining, published)
+				}
+			}
+			c.PublishedTracks = remaining
+
+			// Broadcast track closure to other peers
+			c.Hub.BroadcastToRoomExcept(c.RoomID, c.ID, Message{
+				Type:   "peer-closed-tracks",
+				From:   c.ID,
+				Tracks: msg.Tracks,
+			})
 		}
 	}
 }
@@ -210,4 +405,45 @@ func generateUniqueID() string {
 		return "client-" + time.Now().Format("20060102150405")
 	}
 	return hex.EncodeToString(b)
+}
+
+func callCloudflareAPI(path string, method string, payload interface{}, target interface{}) error {
+	appID := os.Getenv("CLOUDFLARE_APP_ID")
+	secret := os.Getenv("CLOUDFLARE_SECRET")
+	if appID == "" || secret == "" {
+		return fmt.Errorf("Cloudflare Calls credentials not configured")
+	}
+
+	url := fmt.Sprintf("https://rtc.live.cloudflare.com/v1/apps/%s%s", appID, path)
+
+	var body io.Reader
+	if payload != nil {
+		jsonBytes, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewBuffer(jsonBytes)
+	}
+
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", secret))
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Cloudflare API status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return json.NewDecoder(resp.Body).Decode(target)
 }
