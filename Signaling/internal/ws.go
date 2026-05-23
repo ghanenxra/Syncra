@@ -60,6 +60,11 @@ func (c *Client) readPump() {
 		c.Conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
+	c.Conn.SetPingHandler(func(string) error {
+		c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+		_ = c.Conn.WriteControl(websocket.PongMessage, []byte{}, time.Now().Add(writeWait))
+		return nil
+	})
 
 	for {
 		var msg Message
@@ -91,7 +96,7 @@ func (c *Client) readPump() {
 
 		// Process signaling and chat messages
 		switch msg.Type {
-		case "offer", "answer", "ice-candidate":
+		case "offer", "answer", "ice-candidate", "ice-restart-needed":
 			if msg.To == "" {
 				continue
 			}
